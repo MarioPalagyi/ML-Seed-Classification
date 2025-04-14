@@ -1,0 +1,474 @@
+---
+title: "Assignment 1"
+author: "Mario Palagyi"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::robobook:
+    highlight: kate
+    code_folding: hide
+---
+
+# Machine Learning: Seed Classification
+*by: Márió Palágyi*
+
+## Description:
+"You need to train a ML (classification) model that is capable of distinguishing among three different types of seeds based on their measurements (perimeter, area, length, etc.). Using decision trees, create models that take as input the measurements and predict the class of the seed."
+
+In particular:
+
+- Import the attached dataset
+
+- Perform the necessary manipulation
+
+- Perform a short exploration (summary, main descriptive plots, ...)
+
+- Split in train/test (80/20)
+
+- Use the training set to train:
+
+a decision tree, using with default stopping criterion
+ 
+a decision tree, without stopping criterion (complete)
+ 
+a decision tree, pruned from b.
+ 
+- Use the test set to create the confusion matrix and present the main metrics of the three models.
+
+- REPEAT the exercise using only three measurements of your choice (i.e., three columns) instead of all of them. Does the performance substantially decrease?
+
+# Tasks
+## 0. Setup
+```{r, message=FALSE, warning=FALSE}
+# Setup; messages and warnings switched off
+
+# Set WD to the folder of the currently opened r file
+if (rstudioapi::isAvailable())
+  setwd(dirname(rstudioapi::getActiveDocumentContext()[["path"]]))
+
+# Load libraries
+library(data.table)
+library(plotly)
+library(rpart)
+library(rpart.plot)
+library(caret) 
+```
+
+## 1. Import attached dataset - seeds.csv
+```{r}
+seeds <- fread("./data/seeds.csv")
+```
+
+## 2. Perform the necessary manipulation
+```{r}
+str(seeds)
+```
+We can see that the Class column is interpreted as characters. We need to transform it into factors.
+```{r}
+seeds[, Class := as.factor(Class)] # transform categorical to factor
+str(seeds$Class) # Correct factor
+```
+Check empty cells and fix
+```{r}
+#Check empty
+any(is.na(seeds))
+sum(is.na(seeds))
+colSums(is.na(seeds))
+
+# Manipulation to transform empty values
+# make sure fread handles missing values from ",," correctly to "NA"
+seeds[is.na(seeds$Eccentricity),
+      Eccentricity := mean(seeds$Eccentricity, na.rm = TRUE)]
+seeds[is.na(seeds$Solidity),
+      Solidity := mean(seeds$Solidity, na.rm = TRUE)]
+
+print(c("Number of empty cells after imputation:", sum(is.na(seeds))))
+```
+We can see that among other attributes, in the last column we have the classes of the seeds.
+There are 3 types of seeds, Seker, Dermasion and Sira. At first, these values were handled as characters, so I factorized them.
+
+We also discovered that there were 4 empty cells: 1 was in Eccentricity and 3 in Solidity. The options are either omit them or take the mean of the columns. I chose the latter option, the mean imputation.
+
+## 3. Perform a short exploration (summary, main descriptive plots, ...)
+```{r}
+summary(seeds)
+
+seeds[, .N, "Class"]
+
+# Single scatterplot for Compactness
+a <- plot_ly(data = seeds, x = 1:nrow(seeds), 
+             y = ~Compactness, 
+             color =~Class,
+             type = "scatter",
+             mode = "markers", 
+             showlegend = F)
+a
+
+# Single boxplot for Compactness
+b <- plot_ly(data = seeds, y = ~Compactness, x = ~nrow(seeds), type = "box")
+b
+
+# Code for creating a scatterplot for each feature
+#plots <- list()
+#for (i in colnames(seeds[, !"Class"])) {
+#  plots[[i]] <- plot_ly(data = seeds, x = 1:nrow(seeds),
+#                       y = seeds[,get(i)],
+#                      color = seeds[,Class],
+#                      type = "scatter", mode = "markers", showlegend = F)
+#}
+#subplot(plots, nrows = 8, titleY = T, margin = 0.05) # fix to look better
+
+# Code for creating a boxplot for each feature
+#plots <- list()
+#for(i in colnames(seeds[,!"Class"])){
+#  show_legend <- ifelse(i == "Area", TRUE, FALSE)
+#  plots[[i]] <- plot_ly(data = seeds, x = seeds[,Class], y = seeds[,get(i)],
+#                        color = seeds[,Class],
+#                        type = "box", showlegend = show_legend) |>
+#    layout(yaxis = list(title = i))
+#}
+#subplot(plots, nrows = 8, titleY = T, margin = 0.05)
+
+```
+Due to severe lagging and freeze, I decided not to output all plots. Please see the code for the solution. I opted, to choose Compactness as an example feature to plot, and looking at the output, Compactness is useful in predicting seed class.
+
+## 4. Split in train/test (60/40)
+```{r}
+set.seed(12345)
+
+idx <- createDataPartition(seeds[, Class], times=1, p = 0.6, list = F)
+
+seeds_training <- seeds[idx]
+seeds_test <- seeds[-idx]
+
+#seeds[, .(.N, share = .N/nrow(seeds)), Class]
+#seeds_training[, .(n_obs = .N, share = .N / nrow(seeds_training)), Class]
+#seeds_test[, .(n_obs = .N, share = .N / nrow(seeds_test)), Class]
+# create 2 new columns to show the number of objects, the share compared to all entries, both columns grouped by Class
+```
+
+## 5. Use the training set to train
+
+- a decision tree, using with default stopping criterion
+
+- a decision tree, without stopping criterion (complete)
+
+- a decision tree, pruned from b.
+
+### Default Criterion
+```{r}
+# Decision tree, default stopping criterion
+train_x <- seeds_training[, !"Class"]
+train_y <- seeds_training[, Class]
+test_x <- seeds_test[, !"Class"]
+test_y <- seeds_test[, Class]
+
+dtree_default <- rpart::rpart(Class ~ ., method = "class", 
+                              data =seeds_training)
+
+rpart.plot(dtree_default, type = 2, extra = 101, fallen.leaves = F, 
+           main = "Classification Tree for Seeds")
+
+#print(dtree_default)
+printcp(dtree_default) # shows cross-validation error - should be minimized
+plotcp(dtree_default) #Notes: CP means complexity parameter (lower, complexer); X-val is cross validation (lower, better); the dotted line is the error bar: Minimum error + (Standard Error of the Minimum Error), If a tree's error is within this dotted line range, it's considered statistically equivalent to the best (lowest error) tree.
+#summary(dtree_default)
+```
+
+Since we used the function of the rpart library, k-fold cross-validation was automatically performed for us, k=10. Using printcp, we already received the important cross-validation error values. The model grew the tree until we reached a complexity parameter of 0.01, where it defaultly stopped.
+
+From the output we can deduce the following from the model with default stopping criterion (cp = 0.01):
+- at the first and second splits, the cross-validation error significantly lowers
+- the cross validation error stabilizes after the 2nd split
+- after the 2nd split, our model's prediction accuracy doesn't significantly improve, suggesting that at the tree size of 3 or 4, we have our most **parsimonius model** *(new word that I found...)*, meaning the model achieves good prediction accuracy, without being too complex.
+
+### Full tree (no stopping criterion)
+```{r, warning=FALSE}
+# Decision tree, without stopping criterion (complete)
+dtree_full <- rpart::rpart(Class ~ ., method = "class", 
+                           data = seeds_training,
+                           control = rpart.control(minsplit = 1, cp = 0))
+
+rpart.plot(dtree_full, type = 2, extra = 101, fallen.leaves = F, 
+           main = "Complete Classification Tree for Seeds")
+
+printcp(dtree_full)
+plotcp(dtree_full)
+```
+
+As we can see, creating a decision tree without a stopping criterion results in a seriously complex model, most likely overfitted.
+
+### Pruned tree
+```{r}
+# Decision tree, pruned from b)
+which.min(dtree_full$cptable[, "xerror"]) # 10
+# 10 0.00125045     15  0.123973 0.15613 0.0071297 --- from previous table
+
+prune_optimal_cp <- dtree_full$cptable[which.min(dtree_full$cptable[, "xerror"]), "CP"]
+dtree_pruned <- prune(dtree_full, cp = prune_optimal_cp)
+
+rpart.plot(dtree_pruned, type = 2, extra = 101, fallen.leaves = F, 
+           main = "Pruned Classification Tree for Seeds")
+
+printcp(dtree_pruned)
+plotcp(dtree_pruned)
+```
+
+Now we have our final pruned classification tree, at 15 splits, with **cross-validation error** at **0.1561** and **complexity parameter** at **0.0012504.**
+*Result:* We found the overall most parsimonious/efficient classification tree, which has the overall lowest cross-validation error while not overfitting (complexity is not too complex).
+This is also proved by looking at the plotcp generated plot, where the point falls below the dotted line, error bar.
+
+
+## 6. Use the test set to create the confusion matrix and present the main metrics of the three 
+```{r}
+
+predict_y_dtree_default <- predict(dtree_default, newdata = test_x, type = "class") # learn from dtree_default, predict on test_x
+predict_y_dtree_full <- predict(dtree_full, newdata = test_x, type = "class")
+predict_y_dtree_pruned <- predict(dtree_pruned, newdata = test_x, type = "class")
+
+table(predict_y_dtree_default,test_y); table(predict_y_dtree_full,test_y); table(predict_y_dtree_pruned,test_y) # raw confusion matrices
+```
+
+Default Tree:
+```{r}
+confusionMatrix(predict_y_dtree_default, reference=test_y, mode="prec_recall")
+```
+
+Full Tree:
+```{r}
+confusionMatrix(predict_y_dtree_full, reference=test_y, mode="prec_recall")
+```
+
+Pruned Tree:
+```{r}
+confusionMatrix(predict_y_dtree_pruned, reference=test_y, mode="prec_recall")
+```
+
+As we can see on the confusion matrices and the most important metrics, like Precision, Recall and F1-score, the pruned tree returns the best prediction results.
+
+### 7.REPEAT the exercise using only three measurements of your choice
+
+(i.e., three columns) instead of all of them. Does the performance substantially decrease?
+```{r}
+# varImp from caret package
+varImp(dtree_default)
+```
+After some research I found that using varImp from the *caret* library might help us decide on which are the most influential features. The features that best help increasing the model predictability are the ones with the highest scores. Using these, our resulting model should have the best performance, even with just 3 features.
+
+The chosen features: 
+- **Compactness** (2104.8126)
+- **AspectRation** (2091.3987)
+- **ShapeFactor3** (2104.8126)	
+
+```{r}
+seeds_3_training <- seeds_training[, c("AspectRation", "Compactness", "ShapeFactor3", "Class")]
+seeds_3_test <- seeds_test[, c("AspectRation", "Compactness", "ShapeFactor3", "Class")]
+```
+
+In the following, we will create the 3 classification models, the one with the default stopping criterion, the one with the whole tree and the one that is pruned from the full tree.
+
+### Default Tree
+```{r}
+# Decision tree, default stopping criterion
+train_x <- seeds_3_training[, !"Class"]
+train_y <- seeds_3_training[, Class]
+test_x <- seeds_3_test[, !"Class"]
+test_y <- seeds_3_test[, Class]
+
+dtree_3_default <- rpart::rpart(Class ~ ., method = "class", 
+                              data =seeds_3_training)
+
+rpart.plot(dtree_3_default, type = 2, extra = 101, fallen.leaves = F, 
+           main = "Classification Tree for Seeds (Only 3 features)")
+
+printcp(dtree_3_default)
+plotcp(dtree_3_default)
+```
+
+As we can see, the **cross-validation** error lowered greatly after the first split and continued, but couldn't gain a significant difference compared to our model with all features. The cross-validation error is too big at **0.52054.**
+
+### Full Tree
+```{r warning=FALSE}
+dtree_3_full <- rpart::rpart(Class ~ ., method = "class", 
+                           data = seeds_3_training,
+                           control = rpart.control(minsplit = 1, cp = 0))
+
+rpart.plot(dtree_3_full, type = 2, extra = 101, fallen.leaves = F, 
+           main = "Full Classification Tree for Seeds (Only 3 features)")
+
+printcp(dtree_3_full)
+plotcp(dtree_3_full)
+```
+
+From the results, it is obvious that the xerror doesn't go well below 0.5. **Bad news...**
+
+### Pruned Tree
+```{r warning=FALSE}
+# Decision tree, pruned from b)
+which.min(dtree_3_full$cptable[, "xerror"]) # 11
+# 11 0.00089318     53  0.411576 0.48589 0.011211
+
+prune_optimal_cp <- dtree_3_full$cptable[which.min(dtree_3_full$cptable[, "xerror"]), "CP"]
+dtree_3_pruned <- prune(dtree_3_full, cp = prune_optimal_cp)
+
+rpart.plot(dtree_3_pruned, type = 2, extra = 101, fallen.leaves = F, 
+           main = "Pruned Classification Tree for Seeds (Only 3 features)")
+
+printcp(dtree_3_pruned)
+plotcp(dtree_3_pruned)
+```
+As we can see, the minimal result we could achieve for the **cross-validation** error is **0.48589**, which is significantly worse than that when we used all predictors.
+
+### Confusion Matrix
+```{r}
+predict_y_dtree_3_default <- predict(dtree_3_default, newdata = test_x, type = "class") # learn from dtree_default, predict on test_x
+predict_y_dtree_3_full <- predict(dtree_3_full, newdata = test_x, type = "class")
+predict_y_dtree_3_pruned <- predict(dtree_3_pruned, newdata = test_x, type = "class")
+
+table(predict_y_dtree_3_default,test_y); table(predict_y_dtree_3_full,test_y); table(predict_y_dtree_3_pruned,test_y) # raw confusion matrices
+
+confusionMatrix(predict_y_dtree_3_default, reference=test_y, mode="prec_recall")
+confusionMatrix(predict_y_dtree_3_full, reference=test_y, mode="prec_recall")
+confusionMatrix(predict_y_dtree_3_pruned, reference=test_y, mode="prec_recall")
+```
+
+The resulting F1-values being in the **0.6 - 0-9 range** significantly differs from the 17 variable result (F1-values ~ 0.9).
+**Result:** We can conclude that using only **Compactness**, **AspectRation** and **ShapeFactor3** significantly worsens the model's performance. 
+
+Different combinations of predictors would definitely affect the model's performance in various ways.
+
+
+
+# Random Forest and Adaboost - 04.02
+
+More libraries needed:
+```{r, warning=FALSE, message=FALSE}
+library(data.table) #data manipulation
+library(plotly) #nice plots
+library(rpart) #rpart for decision trees
+library(rpart.plot)
+library(caret) # ML tools
+
+library("ranger") # the fastest and better random forest implementation (rf)
+library("adabag") # Adaboost
+```
+
+Similar handling and preprocessing
+```{r}
+seeds <- fread("./data/seeds.csv", na.strings=c("N/A"))
+seeds[, Class := as.factor(Class)]
+
+sum(is.na(seeds))
+colSums(is.na(seeds))
+
+seeds <- na.omit(seeds)
+sum(is.na(seeds))
+
+my_numerical_columns <- colnames(seeds[, .SD, .SDcols = is.numeric])
+my_categorical_columns <- colnames(seeds[, .SD, .SDcols = is.factor])
+
+set.seed(12345)
+
+idx <- createDataPartition(seeds[, Class], times=1, p = 0.6, list = F)
+
+seeds_training <- seeds[idx, ]
+seeds_test <- seeds[-idx]
+
+train_x <- seeds_training[, !"Class"]
+train_y <- seeds_training[, Class]
+test_x <- seeds_test[, !"Class"]
+test_y <- seeds_test[, Class]
+```
+## Random Forest
+
+```{r}
+rf.orig <- ranger(x = train_x, y = train_y)
+rf.orig
+confusionMatrix(data=rf.orig$predictions, reference = train_y, 
+                mode="prec_recall")
+# we see how well the model learned the patterns in the training data
+```
+
+Result:
+- 500 trees were created, 4 features selected for each one, OOB Error low means good accuracy.
+#NOTE: Good performance on training data.
+
+Predictions:
+
+```{r}
+prediction <- predict(object=rf.orig, data=test_x)
+confusionMatrix(data=prediction$predictions, reference=test_y, mode="prec_recall")
+# we see the actual performance of our model on data it hasn't seen before
+```
+
+REsult for model prediction-ability:
+As we can see, the model performance is pretty good, with the Accuracy(92%), Precision metrics in the 90-96% range and the Recall in the 88-94% range. Based on this, rebalancing is not needed. The Kappa score is 0.88, signaling almost perfect agreement.
+As we know, if all classes are important, we focus on Balanced Accuracy, if false positives are important, then Precision and if false negatives, then Recall. **(?Kappa is like a metric of Accuracy, but it accounts for random agreement between the predicted and actual categorical variable?)**
+
+Since both of our confusion matrices showed similarly high results, it means that our model performed well on both datasets (train + test), without signs of over- or underfitting.
+
+```{r}
+seeds_training[, .N/nrow(seeds_training), Class]
+```
+There is no over- or undersampling in the training dataset. No resampling needed.
+
+## Feature Importance
+```{r}
+imp_model.perm <- ranger(x = train_x, y = train_y, importance="permutation")
+imp_model.impurity <- ranger(x = train_x, y = train_y, importance = "impurity")
+
+imp_table.perm <- data.table(
+  Feature = names(imp_model.perm$variable.importance),
+  Importance = imp_model.perm$variable.importance
+)
+
+# Permutation based importance visualization
+a <- plot_ly(data = imp_table.perm, x = ~Feature, y = ~Importance, 
+             type = "bar", showlegend=FALSE) %>%
+  layout(
+    xaxis = list(categoryorder = "total descending", title = "Features"),
+    yaxis = list(title = "Importance"),
+    title = "Feature Importance (Permutation)"
+  )
+
+# Permutation based importance visualization
+imp_table.purity <- data.table(
+  Feature = names(imp_model.impurity$variable.importance),
+  Importance = imp_model.impurity$variable.importance
+)
+
+b <- plot_ly(data = imp_table.purity, 
+             x = ~Feature, 
+             y = ~Importance, 
+             type = "bar", 
+             showlegend=FALSE, 
+             marker = list(color = "orange")) %>%
+  layout(
+    xaxis = list(categoryorder = "total descending", title = "Features"),
+    yaxis = list(title = "Importance"),
+    title = "Feature Importance (Mean Decrease Impurity - RF specific)"
+  )
+a;b
+#plots <- list()
+#plots[[1]] <- a
+#plots[[2]] <- b
+#subplot(plots, nrows = 2, titleY = T, margin = c(0.05,0.05,0.2,0.2))
+```
+We can observe the differences in the value importance metrics. It's not just the order, but the metric that is Random Forest specific has more distinct levels.
+
+## Adaboost
+
+**"The output of one model is used to weight the input data of the next model"**
+
+```{r}
+ada <- adabag::boosting(Class ~ ., data = seeds_training, mfinal = 10)
+my_pred_adaboost <- predict(ada, newdata = test_x)
+confusionMatrix(as.factor(my_pred_adaboost$class), test_y, mode = "prec_recall", positive = "Yes")
+```
+I tried multiple adaboost iteration values and found that after 10, the model performance measures didn't significantly improve (and also computational time increased :,d ).
+So as not to risk overfitting, the mfinal is set to 10.
+
+
+
+
+
+
